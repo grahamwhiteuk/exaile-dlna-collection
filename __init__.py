@@ -18,8 +18,13 @@
 
 
 import gi
+
 gi.require_version('GUPnP', '1.0')
+gi.require_version('GUPnPAV', '1.0')
+
+from gi.repository import GObject
 from gi.repository import GUPnP
+from gi.repository import GUPnPAV
 
 import xl
 import xlgui
@@ -31,11 +36,172 @@ from gettext import gettext as _
 
 logger = logging.getLogger(__name__)
 
-class DlnaManager (object):
+
+class DlnaLibraryPanel (xlgui.panel.collection.CollectionPanel):
+    def __init__ (self, parent, library):
+        self.name = library.library_name
+
+        self.net_collection = xl.collection.Collection(self.name)
+        self.net_collection.add_library(library)
+
+        xlgui.panel.collection.CollectionPanel.__init__(self, parent, self.net_collection,
+                                 self.name, _show_collection_empty_message=False,
+                                 label=self.name)
+
+    @xl.common.threaded
+    def refresh (self):
+        # Since we don't use a ProgressManager/Thingy, we have to call these w/out
+        # a ScanThread
+        self.net_collection.rescan_libraries()
+        GObject.idle_add(self._refresh_tags_in_tree)
+
+
+class DlnaLibrary (xl.collection.Library):
+    def __init__ (self, media_server):
+        # Initialize xl.collection.Library
+        location = "dlna://%s" % (media_server.get_udn())
+        xl.collection.Library.__init__(self, location)
+
+        # Store library name
+        self.library_name = media_server.get_friendly_name()
+
+        # Get server's content directory
+        self.__content_directory = media_server.get_service('urn:schemas-upnp-org:service:ContentDirectory')
+
+        # Tracks
+        self.__all_tracks = []
+        self.__num_all_tracks = 0
+
+    def on_didl_object_available (self, parser, didl_object):
+        """Called when DIDL-Lite parser parses a DIDL object"""
+
+        # Process only audio items
+        if not didl_object.get_upnp_class().startswith('object.item.audioItem'):
+            return
+
+        # Create track with primary URI
+        resources = didl_object.get_resources()
+
+        uri = resources[0].get_uri()
+        track = xl.trax.Track(uri, scan=False)
+
+        # Set up metadata
+        artist = didl_object.get_artist()
+        if artist is not None:
+            track.set_tag_raw('artist', [ artist ], notify_changed=False)
+
+        title = didl_object.get_title()
+        if title is not None:
+            track.set_tag_raw('title', [ title ], notify_changed=False)
+
+        album = didl_object.get_album()
+        if title is not None:
+            track.set_tag_raw('album', [ album ], notify_changed=False)
+
+        track_number = didl_object.get_track_number()
+        if track_number is not None:
+            track.set_tag_raw('tracknumber', [ u'%d' % (track_number) ], notify_changed=False)
+
+        date = didl_object.get_date()
+        if date is not None:
+            tokens = date.split('-')
+            track.set_tag_raw('year', [ tokens[0] ], notify_changed=False)
+
+        # Append
+        self.__all_tracks.append(track)
+
+    def rescan (self, notify_interval=None, force_update=False):
+        if self.collection is None:
+            return True
+
+        if self.scanning:
+            return
+
+        logger.info('Scanning library!')
+        self.scanning = True
+
+        # Get all tracks...
+        self.__all_tracks = []
+
+        # Issue a search - we can use the synchronous variant, because
+        # we are being called in a thread anyway...
+        MAX_REQUEST_SIZE = 64
+
+        start_index = 0
+        request_size = MAX_REQUEST_SIZE
+
+        parser = GUPnPAV.DIDLLiteParser.new()
+        parser.connect("object-available", self.on_didl_object_available)
+
+        while True:
+            # Search from start index
+            (status, out_values) = self.__content_directory.send_action_list("Search",
+                ('ContainerID', 'SearchCriteria', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'),
+                ('0', 'upnp:class derivedfrom "object.item.audioItem" and @refID exists false', '*', start_index, request_size, ''),
+                ('Result', 'NumberReturned', 'TotalMatches'),
+                (str, int, int)
+            )
+
+            didl_xml = out_values[0]
+            number_returned = out_values[1]
+            total_matches = out_values[2]
+
+            logger.info('Retreieved %d music items!' % (number_returned))
+
+            # Parse the returned DIDL
+            if number_returned > 0:
+                parser.parse_didl(didl_xml)
+
+            # Do we have to retrieve more?
+            # NOTE: some implementations (e.g., rygel) return 0 total
+            # matches; in such cases, we try again until we receive zero
+            # matches.
+            start_index = start_index + number_returned
+            remaining = total_matches - start_index
+
+            if (remaining > 0 or total_matches == 0) and number_returned != 0:
+                if remaining > 0:
+                    request_size = min(remaining, MAX_REQUEST_SIZE)
+                else:
+                    request_size = MAX_REQUEST_SIZE
+            else:
+                logger.info('Retreieved all music items!')
+                break
+
+        # Add parsed tracks to collection
+        count = len(self.__all_tracks)
+        self.collection.add_tracks(self.__all_tracks)
+
+        if notify_interval is not None:
+            xl.event.log_event('tracks_scanned', self, count)
+
+        # Cleanup
+        self.scanning = False
+        self.__num_all_tracks = len(self.__all_tracks)
+        self.__all_tracks = []
+
+    # Needs to be overriden because default location walks over the
+    # location
+    def _count_files (self):
+        """Needs to be overriden because default implementation attempts
+           to walks over the location."""
+        return self.__num_all_tracks
+
+
+class DlnaManager (GObject.GObject):
+    __gsignals__ = {
+        'connect-to-server': (GObject.SignalFlags.RUN_LAST, None, (GObject.TYPE_STRING, ))
+    }
+
     def __init__ (self, exaile, menu):
+        GObject.GObject.__init__(self)
+
         self.__control_point = None
 
+        self.__exaile = exaile
+
         self.__media_servers = {}
+        self.__panels = {}
 
         # Menu UI
         self.__menu = menu
@@ -47,6 +213,8 @@ class DlnaManager (object):
         self.__context_manager = GUPnP.ContextManager.create(0)
         self.__context_manager.connect("context-available", self.on_context_available)
         self.__context_manager.rescan_control_points()
+
+        self.connect('connect-to-server', lambda o,u: self.on_connect_to_server(u))
 
     def on_context_available (self, context_manager, context):
         """Called when GUPnP context becomes available."""
@@ -141,6 +309,27 @@ class DlnaManager (object):
         """Called when user clicks on a server menu item."""
 
         logger.info("Clicked on server entry: {0}".format(udn))
+
+        GObject.idle_add(self.emit, "connect-to-server", udn)
+
+
+    def on_connect_to_server (self, udn):
+        """Connection request"""
+
+        if udn in self.__panels:
+            logger.info("Panel already opened!")
+            return
+
+        # Create library
+        library = DlnaLibrary(self.__media_servers[udn])
+
+        # Create new panel
+        panel = DlnaLibraryPanel(self.__exaile.gui.main.window, library)
+
+        panel.refresh() # threaded/async
+        xl.providers.register('main-panel', panel)
+
+        self.__panels[udn] = panel
 
 
 class DlnaLibraryPlugin (object):
