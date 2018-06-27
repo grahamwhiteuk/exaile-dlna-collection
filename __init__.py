@@ -140,7 +140,7 @@ class DlnaLibrary (xl.collection.Library):
             # Search from start index
             (status, out_values) = self.__content_directory.send_action_list("Search",
                 ('ContainerID', 'SearchCriteria', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'),
-                ('0', 'upnp:class derivedfrom "object.item.audioItem" and @refID exists false', '*', start_index, request_size, ''),
+                ('0', 'upnp:class derivedfrom "object.item.audioItem"', '*', start_index, request_size, ''),
                 ('Result', 'NumberReturned', 'TotalMatches'),
                 (str, int, int)
             )
