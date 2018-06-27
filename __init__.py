@@ -29,6 +29,9 @@ from gi.repository import GUPnPAV
 import xl
 import xlgui
 
+from xlgui.panel.collection import CollectionPanel
+from xl import collection, event, trax, common, providers, settings, xdg
+
 import logging
 
 from gettext import gettext as _
