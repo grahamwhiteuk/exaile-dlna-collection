@@ -26,11 +26,13 @@ from gi.repository import GObject
 from gi.repository import GUPnP
 from gi.repository import GUPnPAV
 
-import xl
-import xlgui
+import xl.collection
+import xl.event
+import xl.trax
+import xl.providers
 
-from xlgui.panel.collection import CollectionPanel
-from xl import collection, event, trax, common, providers, settings, xdg
+import xlgui.panel.collection
+import xlgui.widgets.menu
 
 import logging
 
