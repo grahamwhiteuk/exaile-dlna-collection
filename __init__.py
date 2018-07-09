@@ -17,6 +17,8 @@
 #
 
 
+import weakref
+
 import gi
 
 gi.require_version('GUPnP', '1.0')
@@ -201,6 +203,7 @@ class DlnaManager (GObject.GObject):
     def __init__ (self, exaile, menu):
         GObject.GObject.__init__(self)
 
+        self.__context_manager = None
         self.__control_point = None
 
         self.__exaile = exaile
@@ -211,29 +214,47 @@ class DlnaManager (GObject.GObject):
         # Menu UI
         self.__menu = menu
 
-        self.__menu.add_item(xlgui.widgets.menu.simple_menu_item('rescan', [], _('Rescan...'), callback=self.rescan))
+        weak_self = weakref.ref(self) # Create a weak reference to pass to the item's callback
+        self.__menu.add_item(xlgui.widgets.menu.simple_menu_item('rescan', [], _('Rescan...'), callback=lambda *args: weak_self().rescan()))
         self.__menu.add_item(xlgui.widgets.menu.simple_separator('sep', ['rescan']))
 
         # Create GUPnP context manager
         self.__context_manager = GUPnP.ContextManager.create(0)
-        self.__context_manager.connect("context-available", self.on_context_available)
+        self.__context_manager.connect("context-available", weak_self().on_context_available)
         self.__context_manager.rescan_control_points()
 
-        self.connect('connect-to-server', lambda o,u: self.on_connect_to_server(u))
+        self.connect('connect-to-server', lambda o,u: weak_self().on_connect_to_server(u))
+
+    def __del__ (self):
+        """Overriden to track object's lifetime."""
+        logger.info("DLNA Manager destroyed!")
+
+    def shutdown (self):
+        self.__exaile = None
+        self.__context_manager = None
+        self.__control_point = None
+
+        #self.__media_servers = {}
 
     def on_context_available (self, context_manager, context):
         """Called when GUPnP context becomes available."""
 
+        weak_self = weakref.ref(self) # Create a weak reference to self to pass on to signal connections
+
         # Create control point that monitors appearance and disappearance
         # of media servers
-        self.__control_point = GUPnP.ControlPoint.new(context, "urn:schemas-upnp-org:device:MediaServer:1")
-        self.__control_point.connect("device-proxy-available", self.on_server_proxy_available);
-        self.__control_point.connect("device-proxy-unavailable", self.on_server_proxy_unavailable);
+        control_point = GUPnP.ControlPoint.new(context, "urn:schemas-upnp-org:device:MediaServer:1")
+        control_point.connect("device-proxy-available", lambda *args: weak_self().on_server_proxy_available(*args))
+        control_point.connect("device-proxy-unavailable", lambda *args: weak_self().on_server_proxy_unavailable(*args))
 
-        self.__control_point.set_active(True)
+        control_point.set_active(True)
 
         # Let context manager manage the control point
-        context_manager.manage_control_point(self.__control_point)
+        context_manager.manage_control_point(control_point)
+
+        # Store reference
+        self.__control_point = control_point
+
 
     def on_server_proxy_available (self, control_point, media_server):
         """Called when a Media Server becomes available."""
@@ -261,7 +282,7 @@ class DlnaManager (GObject.GObject):
         if udn in self.__media_servers:
             del self.__media_servers[udn]
 
-            self.rebuild_server_menu_items()
+        self.rebuild_server_menu_items()
 
     def rescan (self, *_args):
         """Rescan for DLNA media servers."""
@@ -269,7 +290,8 @@ class DlnaManager (GObject.GObject):
         logger.info("Manual rescan!")
 
         # Trigger rescan of control points
-        self.__context_manager.rescan_control_points()
+        if self.__context_manager is not None:
+            self.__context_manager.rescan_control_points()
 
 
     def rebuild_server_menu_items (self):
@@ -289,8 +311,8 @@ class DlnaManager (GObject.GObject):
         #servers = sorted(servers, key=lambda server: server[0].lower())
 
         # Add items
-        for server in servers:
-            self.new_server_menu_item(server[0], server[1])
+        for (friendly_name, udn) in servers:
+            self.new_server_menu_item(friendly_name, udn)
 
 
     def clear_menu_items (self):
@@ -305,9 +327,11 @@ class DlnaManager (GObject.GObject):
     def new_server_menu_item (self, name, udn):
         """Adds a new server menu item."""
 
+        weak_self = weakref.ref(self)
+
         logger.info("Adding menu %s: %s", name, udn)
         if self.__menu:
-            menu_item = xlgui.widgets.menu.simple_menu_item(udn, ['sep'], name, callback=lambda *_x: self.on_server_menu_entry_clicked(udn))
+            menu_item = xlgui.widgets.menu.simple_menu_item(udn, ['sep'], name, callback=lambda *args: weak_self().on_server_menu_entry_clicked(udn))
             self.__menu.add_item(menu_item)
 
     def on_server_menu_entry_clicked (self, udn):
@@ -352,7 +376,10 @@ class DlnaLibraryPlugin (object):
         """Shutdown plugin."""
 
         if self.__manager is not None:
+            self.__manager.shutdown()
             self.__manager = None
+
+        self.__exaile = None
 
     def disable (self, exaile):
         """Disable plugin."""
