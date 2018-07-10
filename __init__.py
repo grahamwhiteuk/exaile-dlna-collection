@@ -24,6 +24,7 @@ import gi
 gi.require_version('GUPnP', '1.0')
 gi.require_version('GUPnPAV', '1.0')
 
+from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import GUPnP
 from gi.repository import GUPnPAV
@@ -43,7 +44,6 @@ from gettext import gettext as _
 
 logger = logging.getLogger(__name__)
 
-
 class DlnaLibraryPanel (xlgui.panel.collection.CollectionPanel):
     def __init__ (self, parent, library):
         self.name = library.library_name
@@ -55,16 +55,29 @@ class DlnaLibraryPanel (xlgui.panel.collection.CollectionPanel):
                                  self.name, _show_collection_empty_message=False,
                                  label=self.name)
 
+        library.connect("contents-changed", lambda *args: self.refresh())
+
+    def __del__ (self):
+        logger.info("DLNA Library Panel destroyed!")
+
     @xl.common.threaded
     def refresh (self):
+        logger.info("DLNA Library Panel: refresh")
+
         # Since we don't use a ProgressManager/Thingy, we have to call these w/out
         # a ScanThread
         self.net_collection.rescan_libraries()
         GObject.idle_add(self._refresh_tags_in_tree)
 
 
-class DlnaLibrary (xl.collection.Library):
+class DlnaLibrary (xl.collection.Library, GObject.GObject):
+    __gsignals__ = {
+        'contents-changed': (GObject.SignalFlags.RUN_LAST, None, ())
+    }
+
     def __init__ (self, media_server):
+        GObject.GObject.__init__(self)
+
         # Initialize xl.collection.Library
         location = "dlna://%s" % (media_server.get_udn())
         xl.collection.Library.__init__(self, location)
@@ -75,9 +88,52 @@ class DlnaLibrary (xl.collection.Library):
         # Get server's content directory
         self.__content_directory = media_server.get_service('urn:schemas-upnp-org:service:ContentDirectory')
 
+        # Subscribe to update notifications
+        weak_self = weakref.ref(self)
+        self.__content_directory.add_notify("SystemUpdateID", str, lambda *args: weak_self().on_system_update_id(*args))
+        self.__content_directory.set_subscribed(True)
+
+        self.__ignore_id_update = True # Ignore initial ID update
+        self.__last_update_id = None
+        self.__update_timeout_id = None
+
         # Tracks
         self.__all_tracks = []
         self.__num_all_tracks = 0
+
+    def __del__ (self):
+        logger.info("DLNA Library destroyed!")
+
+    def on_system_update_id (self, content_directory, variable, value):
+        logger.info("DLNA Library: system updated IDs!")
+
+        # Ignore initial ID update
+        if self.__ignore_id_update:
+            self.__ignore_id_update = False
+            self.__last_update_id = value
+            return
+
+        # Require the update ID to differ from the previous one
+        if self.__last_update_id is not None and self.__last_update_id == value:
+            return
+
+        # Schedule referesh; according to spec, the system update ID
+        # event is moderated at maximum rate of 0.5 Hz (once every
+        # two seconds). So we wait 5 seconds before running the update
+        if self.__update_timeout_id is not None:
+            GLib.source_remove(self.__update_timeout_id)
+
+        weak_self = weakref.ref(self)
+        self.__update_timeout_id = GLib.timeout_add_seconds(5, lambda *args: weak_self().on_system_update_id_timeout())
+
+    def on_system_update_id_timeout (self):
+        logger.info("DLNA Library: update timeout!")
+
+        self.emit("contents-changed")
+
+        self.__update_timeout_id = None
+        return False
+
 
     def on_didl_object_available (self, parser, didl_object):
         """Called when DIDL-Lite parser parses a DIDL object"""
@@ -128,6 +184,7 @@ class DlnaLibrary (xl.collection.Library):
         self.scanning = True
 
         # Get all tracks...
+        self.collection.remove_tracks(self.__all_tracks)
         self.__all_tracks = []
 
         # Issue a search - we can use the synchronous variant, because
@@ -137,8 +194,10 @@ class DlnaLibrary (xl.collection.Library):
         start_index = 0
         request_size = MAX_REQUEST_SIZE
 
+        weak_self = weakref.ref(self)
+
         parser = GUPnPAV.DIDLLiteParser.new()
-        parser.connect("object-available", self.on_didl_object_available)
+        parser.connect("object-available", lambda *args: weak_self().on_didl_object_available(*args))
 
         while True:
             # Search from start index
@@ -185,7 +244,7 @@ class DlnaLibrary (xl.collection.Library):
         # Cleanup
         self.scanning = False
         self.__num_all_tracks = len(self.__all_tracks)
-        self.__all_tracks = []
+        #self.__all_tracks = []
 
     # Needs to be overriden because default location walks over the
     # location
