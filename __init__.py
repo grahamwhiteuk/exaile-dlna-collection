@@ -76,11 +76,13 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
     }
 
     def __init__ (self, media_server):
-        GObject.GObject.__init__(self)
-
         # Initialize xl.collection.Library
         location = "dlna://%s" % (media_server.get_udn())
         xl.collection.Library.__init__(self, location)
+
+        # Initialize GObject
+        GObject.GObject.__init__(self)
+
 
         # Store library name
         self.library_name = media_server.get_friendly_name()
@@ -341,8 +343,14 @@ class DlnaManager (GObject.GObject):
 
         logger.info("DLNA Media Server unavailable: '{0}''".format(udn))
 
+        # Remove the reference to media server proxy
         if udn in self.__media_servers:
             del self.__media_servers[udn]
+
+        # Unregister the panel
+        if udn in self.__panels:
+            xl.providers.unregister('main-panel', self.__panels[udn])
+            del self.__panels[udn]
 
         self.rebuild_server_menu_items()
 
