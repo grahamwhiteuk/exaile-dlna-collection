@@ -99,12 +99,13 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
 
         # Tracks
         self.__all_tracks = []
-        self.__num_all_tracks = 0
 
     def __del__ (self):
         logger.info("DLNA Library destroyed!")
 
     def on_system_update_id (self, content_directory, variable, value):
+        """Called whenever the contents of the media server change."""
+
         logger.info("DLNA Library: system updated IDs!")
 
         # Ignore initial ID update
@@ -127,8 +128,12 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
         self.__update_timeout_id = GLib.timeout_add_seconds(5, lambda *args: weak_self().on_system_update_id_timeout())
 
     def on_system_update_id_timeout (self):
+        """Called 5 seconds after last on_system_update_id() call."""
+
         logger.info("DLNA Library: update timeout!")
 
+        # Emit a signal that is picked up by the library panel; which
+        # will in turn perform rescan in a separate thread
         self.emit("contents-changed")
 
         self.__update_timeout_id = None
@@ -243,15 +248,13 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
 
         # Cleanup
         self.scanning = False
-        self.__num_all_tracks = len(self.__all_tracks)
-        #self.__all_tracks = []
 
     # Needs to be overriden because default location walks over the
     # location
     def _count_files (self):
         """Needs to be overriden because default implementation attempts
            to walks over the location."""
-        return self.__num_all_tracks
+        return len(self.__all_tracks)
 
 
 class DlnaManager (GObject.GObject):
