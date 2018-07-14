@@ -16,6 +16,7 @@
 #  MA 02110-1301, USA.
 #
 
+from __future__ import print_function
 
 import weakref
 
@@ -44,81 +45,114 @@ from gettext import gettext as _
 
 logger = logging.getLogger(__name__)
 
-class DlnaLibraryPanel (xlgui.panel.collection.CollectionPanel):
-    def __init__ (self, parent, library):
-        self.name = library.library_name
-
-        self.net_collection = xl.collection.Collection(self.name)
-        self.net_collection.add_library(library)
-
-        xlgui.panel.collection.CollectionPanel.__init__(self, parent, self.net_collection,
-                                 self.name, _show_collection_empty_message=False,
-                                 label=self.name)
-
-        library.connect("contents-changed", lambda *args: self.refresh())
+class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel):
+    def __init__ (self, parent, collection):
+        super(DlnaCollectionPanel, self).__init__(parent, collection, collection.name, _show_collection_empty_message=False, label=collection.name)
 
     def __del__ (self):
-        logger.info("DLNA Library Panel destroyed!")
+        print("DLNA Collection panel destroyed!")
+
+#class DlnaCollection (xl.collection.Collection):
+class DlnaCollection (xl.trax.TrackDB):
+    def __init__ (self, media_server):
+        super(DlnaCollection, self).__init__(media_server.get_friendly_name())
+
+        # This is a property from xl.collection.Collection that is
+        # expected by the xlgui.panel.collection.CollectionPanel
+        self._scanning = False
+
+        # Store reference to media server
+        self.__media_server = media_server
+
+        # Update when tracks change
+        self.__media_server.connect('tracks-changed', self.on_tracks_changed)
+
+        # Connect to server (perform initial update)
+        self.__media_server.connect_to_server()
+
+    def __del__ (self):
+        print("DLNA Collection destroyed!")
+
+    def on_tracks_changed (self, media_server):
+        logger.info("DLNA Collection: tracks changed!")
+
+        new_tracks = media_server.get_tracks()
+
+        # Threaded
+        self.update_tracks(new_tracks)
 
     @xl.common.threaded
-    def refresh (self):
-        logger.info("DLNA Library Panel: refresh")
+    def update_tracks (self, new_tracks):
+        self._scanning = True
 
-        # Since we don't use a ProgressManager/Thingy, we have to call these w/out
-        # a ScanThread
-        self.net_collection.rescan_libraries()
-        GObject.idle_add(self._refresh_tags_in_tree)
+        # Remove old tracks; this is a bit roundabout, but works...
+        old_tracks = self.get_tracks()
+        self.remove_tracks(old_tracks)
+
+        # Add new tracks
+        self.add_tracks(new_tracks)
+
+        self._scanning = False
 
 
-class DlnaLibrary (xl.collection.Library, GObject.GObject):
+class MediaServer (GUPnP.DeviceProxy):
+    __CONTENT_DIR = "urn:schemas-upnp-org:service:ContentDirectory"
+    __MAX_REQUEST_SIZE = 64
+
     __gsignals__ = {
-        'contents-changed': (GObject.SignalFlags.RUN_LAST, None, ())
+        'tracks-changed': (GObject.SignalFlags.RUN_LAST, None, ())
     }
 
-    def __init__ (self, media_server):
-        # Initialize xl.collection.Library
-        location = "dlna://%s" % (media_server.get_udn())
-        xl.collection.Library.__init__(self, location)
+    def __init__ (self):
+        super(MediaServer, self).__init__()
 
-        # Initialize GObject
-        GObject.GObject.__init__(self)
+        self.__content_directory = None
+        self.__scanning = False
+        self.__tracks = []
 
+    def __del__ (self):
+        logger.info("MediaServer object {0}: {1} '{2}' destroyed!".format(self, self.get_udn(), self.get_friendly_name()))
 
-        # Store library name
-        self.library_name = media_server.get_friendly_name()
+    def get_tracks (self):
+        return self.__tracks
 
+    def connect_to_server (self):
         # Get server's content directory
-        self.__content_directory = media_server.get_service('urn:schemas-upnp-org:service:ContentDirectory')
+        self.__content_directory = self.get_service(self.__CONTENT_DIR)
 
         # Subscribe to update notifications
         weak_self = weakref.ref(self)
         self.__content_directory.add_notify("SystemUpdateID", str, lambda *args: weak_self().on_system_update_id(*args))
         self.__content_directory.set_subscribed(True)
 
-        self.__ignore_id_update = True # Ignore initial ID update
         self.__last_update_id = None
         self.__update_timeout_id = None
 
-        # Tracks
-        self.__all_tracks = []
+        # Initial update
+        self.rescan_audio_items()
 
-    def __del__ (self):
-        logger.info("DLNA Library destroyed!")
+    def disconnect_from_server (self):
+        # Clear content directory
+        self.__content_directory.set_subscribed(False)
+        self.__content_directory = None
 
     def on_system_update_id (self, content_directory, variable, value):
         """Called whenever the contents of the media server change."""
 
-        logger.info("DLNA Library: system updated IDs!")
+        logger.info("MediaServer: system updated IDs!")
 
         # Ignore initial ID update
-        if self.__ignore_id_update:
-            self.__ignore_id_update = False
+        if self.__last_update_id is None:
+            logger.info("MediaServer: initial ID update; ignoring!")
             self.__last_update_id = value
             return
 
         # Require the update ID to differ from the previous one
-        if self.__last_update_id is not None and self.__last_update_id == value:
+        if self.__last_update_id == value:
+            logger.info("MediaServer: ID update, but no change in ID; ignoring!")
             return
+
+        self.__last_update_id = value
 
         # Schedule referesh; according to spec, the system update ID
         # event is moderated at maximum rate of 0.5 Hz (once every
@@ -132,80 +166,76 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
     def on_system_update_id_timeout (self):
         """Called 5 seconds after last on_system_update_id() call."""
 
-        logger.info("DLNA Library: update timeout!")
-
-        # Emit a signal that is picked up by the library panel; which
-        # will in turn perform rescan in a separate thread
-        self.emit("contents-changed")
+        logger.info("MediaServer: update timeout - starting rescan!")
 
         self.__update_timeout_id = None
+
+        # Threaded! Will emit a signal when scan is complete
+        self.rescan_audio_items()
+
         return False
 
+    @xl.common.threaded
+    def rescan_audio_items (self):
+        logger.info('Scanning media server for audio items!')
 
-    def on_didl_object_available (self, parser, didl_object):
-        """Called when DIDL-Lite parser parses a DIDL object"""
-
-        # Process only audio items
-        if not didl_object.get_upnp_class().startswith('object.item.audioItem'):
+        if self.__scanning:
+            logger.info("Scan already in progress!")
             return
 
-        # Create track with primary URI
-        resources = didl_object.get_resources()
-
-        uri = resources[0].get_uri()
-        track = xl.trax.Track(uri, scan=False)
-
-        # Set up metadata
-        artist = didl_object.get_artist()
-        if artist is not None:
-            track.set_tag_raw('artist', [ artist ], notify_changed=False)
-
-        title = didl_object.get_title()
-        if title is not None:
-            track.set_tag_raw('title', [ title ], notify_changed=False)
-
-        album = didl_object.get_album()
-        if title is not None:
-            track.set_tag_raw('album', [ album ], notify_changed=False)
-
-        track_number = didl_object.get_track_number()
-        if track_number is not None:
-            track.set_tag_raw('tracknumber', [ u'%d' % (track_number) ], notify_changed=False)
-
-        date = didl_object.get_date()
-        if date is not None:
-            tokens = date.split('-')
-            track.set_tag_raw('year', [ tokens[0] ], notify_changed=False)
-
-        # Append
-        self.__all_tracks.append(track)
-
-    def rescan (self, notify_interval=None, force_update=False):
-        if self.collection is None:
-            return True
-
-        if self.scanning:
-            return
-
-        logger.info('Scanning library!')
-        self.scanning = True
-
-        # Get all tracks...
-        self.collection.remove_tracks(self.__all_tracks)
-        self.__all_tracks = []
+        self.__scanning = True
 
         # Issue a search - we can use the synchronous variant, because
         # we are being called in a thread anyway...
-        MAX_REQUEST_SIZE = 64
-
         start_index = 0
-        request_size = MAX_REQUEST_SIZE
+        request_size = self.__MAX_REQUEST_SIZE
 
-        weak_self = weakref.ref(self)
+        # DIDL parsing
+        all_tracks = []
 
+        def on_didl_object_available (parser, didl_object):
+            """Called when DIDL-Lite parser parses a DIDL object"""
+
+            # Process only audio items
+            if not didl_object.get_upnp_class().startswith('object.item.audioItem'):
+                return
+
+            # Create track with primary URI
+            resources = didl_object.get_resources()
+
+            uri = resources[0].get_uri()
+            track = xl.trax.Track(uri, scan=False)
+
+            # Set up metadata
+            artist = didl_object.get_artist()
+            if artist is not None:
+                track.set_tag_raw('artist', [ artist ], notify_changed=False)
+
+            title = didl_object.get_title()
+            if title is not None:
+                track.set_tag_raw('title', [ title ], notify_changed=False)
+
+            album = didl_object.get_album()
+            if title is not None:
+                track.set_tag_raw('album', [ album ], notify_changed=False)
+
+            track_number = didl_object.get_track_number()
+            if track_number is not None:
+                track.set_tag_raw('tracknumber', [ u'%d' % (track_number) ], notify_changed=False)
+
+            date = didl_object.get_date()
+            if date is not None:
+                tokens = date.split('-')
+                track.set_tag_raw('year', [ tokens[0] ], notify_changed=False)
+
+            # Append to list
+            all_tracks.append(track)
+
+        # Parser
         parser = GUPnPAV.DIDLLiteParser.new()
-        parser.connect("object-available", lambda *args: weak_self().on_didl_object_available(*args))
+        parser.connect("object-available", on_didl_object_available)
 
+        # Process
         while True:
             # Search from start index
             (status, out_values) = self.__content_directory.send_action_list("Search",
@@ -241,22 +271,19 @@ class DlnaLibrary (xl.collection.Library, GObject.GObject):
                 logger.info('Retreieved all music items!')
                 break
 
-        # Add parsed tracks to collection
-        count = len(self.__all_tracks)
-        self.collection.add_tracks(self.__all_tracks)
-
-        if notify_interval is not None:
-            xl.event.log_event('tracks_scanned', self, count)
 
         # Cleanup
-        self.scanning = False
+        self.__scanning = False
 
-    # Needs to be overriden because default location walks over the
-    # location
-    def _count_files (self):
-        """Needs to be overriden because default implementation attempts
-           to walks over the location."""
-        return len(self.__all_tracks)
+        # Set the tracks
+        print("Retreieved %d audio tracks!" % len(all_tracks))
+
+        self.__tracks = all_tracks
+
+        #self.emit("tracks-changed")
+        GObject.idle_add(self.emit, "tracks-changed")
+
+GObject.type_register(MediaServer)
 
 
 class DlnaManager (GObject.GObject):
@@ -265,7 +292,7 @@ class DlnaManager (GObject.GObject):
     }
 
     def __init__ (self, exaile, menu):
-        GObject.GObject.__init__(self)
+        super(DlnaManager, self).__init__()
 
         self.__context_manager = None
         self.__control_point = None
@@ -281,6 +308,16 @@ class DlnaManager (GObject.GObject):
         weak_self = weakref.ref(self) # Create a weak reference to pass to the item's callback
         self.__menu.add_item(xlgui.widgets.menu.simple_menu_item('rescan', [], _('Rescan...'), callback=lambda *args: weak_self().rescan()))
         self.__menu.add_item(xlgui.widgets.menu.simple_separator('sep', ['rescan']))
+
+        # Register MediaServer class with GUPnP resource factory
+        # This way, device-proxy-available signal will create an instance
+        # of MediaServer instead of base GUPnP.DeviceProxy
+        factory = GUPnP.ResourceFactory.get_default()
+
+        factory.register_resource_proxy_type("urn:schemas-upnp-org:device:MediaServer:1", MediaServer)
+        factory.register_resource_proxy_type("urn:schemas-upnp-org:device:MediaServer:2", MediaServer)
+        factory.register_resource_proxy_type("urn:schemas-upnp-org:device:MediaServer:3", MediaServer)
+        factory.register_resource_proxy_type("urn:schemas-upnp-org:device:MediaServer:4", MediaServer)
 
         # Create GUPnP context manager
         self.__context_manager = GUPnP.ContextManager.create(0)
@@ -329,8 +366,10 @@ class DlnaManager (GObject.GObject):
 
         # Store the media server
         if udn in self.__media_servers:
+            logger.info("Server with this UDN already in the list! Ignoring...")
             return
 
+        logger.info("Adding server to the list!")
         self.__media_servers[udn] = media_server
 
         # Rebuild menu items list
@@ -419,15 +458,14 @@ class DlnaManager (GObject.GObject):
             logger.info("Panel already opened!")
             return
 
-        # Create library
-        library = DlnaLibrary(self.__media_servers[udn])
+        # Create collection object
+        collection = DlnaCollection(self.__media_servers[udn])
 
         # Create new panel
-        panel = DlnaLibraryPanel(self.__exaile.gui.main.window, library)
+        panel = DlnaCollectionPanel(self.__exaile.gui.main.window, collection)
 
-        panel.refresh() # threaded/async
+        #panel.refresh() # threaded/async
         xl.providers.register('main-panel', panel)
-
         self.__panels[udn] = panel
 
 
