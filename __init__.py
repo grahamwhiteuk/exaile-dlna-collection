@@ -24,11 +24,15 @@ import gi
 
 gi.require_version('GUPnP', '1.0')
 gi.require_version('GUPnPAV', '1.0')
+gi.require_version('Gtk', '3.0')
 
 from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import GUPnP
 from gi.repository import GUPnPAV
+
+from gi.repository import Gtk
+from gi.repository import Gdk
 
 import xl.collection
 import xl.event
@@ -36,6 +40,7 @@ import xl.trax
 import xl.providers
 
 import xlgui.panel.collection
+import xlgui.panel.menus
 import xlgui.widgets.menu
 
 import logging
@@ -49,8 +54,40 @@ class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel):
     def __init__ (self, parent, collection):
         super(DlnaCollectionPanel, self).__init__(parent, collection, collection.name, _show_collection_empty_message=False, label=collection.name)
 
+        weak_self = weakref.ref(self)
+
+        # Replace the CollectionPanelMenu with TrackPanelMenu, which
+        # does not have actions such as "Open directory" or
+        # "Move to trash"
+        self.menu = xlgui.panel.menus.TrackPanelMenu(self)
+
+        # Add a "Disconnect" button to the top of the panel
+        top_box = self.builder.get_object("collection_top_hbox")
+
+        disconnect_icon = Gtk.Image(stock=Gtk.STOCK_DISCONNECT)
+
+        button = Gtk.Button(image=disconnect_icon)
+        button.set_relief(Gtk.ReliefStyle.NONE) # Be consistent with the rest of panel
+        button.set_tooltip_text("Disconnect from share")
+        button.connect("button-press-event", lambda *args: weak_self().on_disconnect_button_press_event(*args))
+
+        top_box.pack_end(button, False, False, 0)
+        button.show()
+
+    def on_refresh_button_press_event (self, button, event):
+        """Override the referesh button action."""
+        if event.get_state() & Gdk.ModifierType.SHIFT_MASK:
+            print("FIXME: RESCAN!")
+        else:
+            self.load_tree()
+
+    def on_disconnect_button_press_event (self, button, event):
+        """Disconnect button press handler."""
+        print("FIXME: DISCONNECT!")
+
     def __del__ (self):
         print("DLNA Collection panel destroyed!")
+
 
 #class DlnaCollection (xl.collection.Collection):
 class DlnaCollection (xl.trax.TrackDB):
