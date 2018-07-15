@@ -541,6 +541,14 @@ class DlnaManager (GObject.GObject):
 
         if udn in self.__panels:
             logger.info("Panel already opened!")
+
+            # A somewhat hackish way to ensure that the panel is reopend
+            # if the user closed it without disconnecting
+            panel = self.__panels[udn]
+            xl.providers.unregister('main-panel', panel)
+
+            xl.providers.register('main-panel', panel)
+
             return
 
         # Create collection object
