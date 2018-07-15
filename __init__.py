@@ -50,9 +50,14 @@ from gettext import gettext as _
 
 logger = logging.getLogger(__name__)
 
-class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel):
+class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel, GObject.GObject):
+    __gsignals__ = {
+        'disconnect-request': (GObject.SignalFlags.RUN_LAST, None, ())
+    }
+
     def __init__ (self, parent, collection):
-        super(DlnaCollectionPanel, self).__init__(parent, collection, collection.name, _show_collection_empty_message=False, label=collection.name)
+        xlgui.panel.collection.CollectionPanel.__init__(self, parent, collection, collection.udn, _show_collection_empty_message=False, label=collection.name)
+        GObject.GObject.__init__(self)
 
         weak_self = weakref.ref(self)
 
@@ -77,13 +82,13 @@ class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel):
     def on_refresh_button_press_event (self, button, event):
         """Override the referesh button action."""
         if event.get_state() & Gdk.ModifierType.SHIFT_MASK:
-            print("FIXME: RESCAN!")
+            self.collection.rescan_media_server()
         else:
             self.load_tree()
 
     def on_disconnect_button_press_event (self, button, event):
         """Disconnect button press handler."""
-        print("FIXME: DISCONNECT!")
+        GObject.idle_add(self.emit, "disconnect-request")
 
     def __del__ (self):
         print("DLNA Collection panel destroyed!")
@@ -94,6 +99,8 @@ class DlnaCollection (xl.trax.TrackDB):
     def __init__ (self, media_server):
         super(DlnaCollection, self).__init__(media_server.get_friendly_name())
 
+        self.udn = media_server.get_udn()
+
         # This is a property from xl.collection.Collection that is
         # expected by the xlgui.panel.collection.CollectionPanel
         self._scanning = False
@@ -102,13 +109,22 @@ class DlnaCollection (xl.trax.TrackDB):
         self.__media_server = media_server
 
         # Update when tracks change
-        self.__media_server.connect('tracks-changed', self.on_tracks_changed)
+        handler_id = self.__media_server.connect('tracks-changed', self.on_tracks_changed)
+        self.__tracks_changed_handler = handler_id
 
         # Connect to server (perform initial update)
         self.__media_server.connect_to_server()
 
     def __del__ (self):
         print("DLNA Collection destroyed!")
+
+    def shutdown (self):
+        # Clean up the connection
+        self.__media_server.disconnect(self.__tracks_changed_handler)
+
+        # Clean-up underlying MediaServer object
+        self.__media_server.disconnect_from_server()
+        self.__media_server = None
 
     def on_tracks_changed (self, media_server):
         logger.info("DLNA Collection: tracks changed!")
@@ -117,6 +133,10 @@ class DlnaCollection (xl.trax.TrackDB):
 
         # Threaded
         self.update_tracks(new_tracks)
+
+    def rescan_media_server (self):
+        logger.info("DLNA Collection: rescan media server")
+        self.__media_server.rescan_audio_items()
 
     @xl.common.threaded
     def update_tracks (self, new_tracks):
@@ -419,16 +439,40 @@ class DlnaManager (GObject.GObject):
 
         logger.info("DLNA Media Server unavailable: '{0}''".format(udn))
 
+        # Clean-up the panel
+        if udn in self.__panels:
+            panel = self.__panels[udn]
+
+            panel.collection.shutdown()
+
+            # Remove provider
+            xl.providers.unregister('main-panel', panel)
+
+            # Remove reference
+            del self.__panels[udn]
+
         # Remove the reference to media server proxy
         if udn in self.__media_servers:
             del self.__media_servers[udn]
 
+        self.rebuild_server_menu_items()
+
+    def on_disconnect_request (self, panel):
+        """Called when user requests disconnect from the panel."""
+
+        logger.info("Disconnect from share requested by user!")
+
+        # Shutdown the underlying collection
+        panel.collection.shutdown()
+
         # Unregister the panel
+        xl.providers.unregister('main-panel', panel)
+
+        # Remove from the list
+        udn = panel.collection.udn
         if udn in self.__panels:
-            xl.providers.unregister('main-panel', self.__panels[udn])
             del self.__panels[udn]
 
-        self.rebuild_server_menu_items()
 
     def rescan (self, *_args):
         """Rescan for DLNA media servers."""
@@ -499,9 +543,11 @@ class DlnaManager (GObject.GObject):
         collection = DlnaCollection(self.__media_servers[udn])
 
         # Create new panel
-        panel = DlnaCollectionPanel(self.__exaile.gui.main.window, collection)
+        weak_self = weakref.ref(self)
 
-        #panel.refresh() # threaded/async
+        panel = DlnaCollectionPanel(self.__exaile.gui.main.window, collection)
+        panel.connect("disconnect-request", lambda *args: weak_self().on_disconnect_request(*args))
+
         xl.providers.register('main-panel', panel)
         self.__panels[udn] = panel
 
