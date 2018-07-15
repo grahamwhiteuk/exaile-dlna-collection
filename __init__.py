@@ -91,7 +91,7 @@ class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel, GObject.GObje
         GObject.idle_add(self.emit, "disconnect-request")
 
     def __del__ (self):
-        print("DLNA Collection panel destroyed!")
+        logger.info("DLNA Collection panel destroyed!")
 
 
 #class DlnaCollection (xl.collection.Collection):
@@ -116,11 +116,12 @@ class DlnaCollection (xl.trax.TrackDB):
         self.__media_server.connect_to_server()
 
     def __del__ (self):
-        print("DLNA Collection destroyed!")
+        logger.info("DLNA Collection object destroyed!")
 
     def shutdown (self):
-        # Clean up the connection
+        # Clean up the signal connection
         self.__media_server.disconnect(self.__tracks_changed_handler)
+        self.__tracks_changed_handler = None
 
         # Clean-up underlying MediaServer object
         self.__media_server.disconnect_from_server()
@@ -333,7 +334,7 @@ class MediaServer (GUPnP.DeviceProxy):
         self.__scanning = False
 
         # Set the tracks
-        print("Retreieved %d audio tracks!" % len(all_tracks))
+        logger.info("DLNA MediaServer: retreieved {0} audio tracks!".format(len(all_tracks)))
 
         self.__tracks = all_tracks
 
@@ -444,6 +445,7 @@ class DlnaManager (GObject.GObject):
             panel = self.__panels[udn]
 
             panel.collection.shutdown()
+            panel.collection = None
 
             # Remove provider
             xl.providers.unregister('main-panel', panel)
@@ -462,14 +464,16 @@ class DlnaManager (GObject.GObject):
 
         logger.info("Disconnect from share requested by user!")
 
+        udn = panel.collection.udn
+
         # Shutdown the underlying collection
         panel.collection.shutdown()
+        panel.collection = None
 
         # Unregister the panel
         xl.providers.unregister('main-panel', panel)
 
         # Remove from the list
-        udn = panel.collection.udn
         if udn in self.__panels:
             del self.__panels[udn]
 
