@@ -91,7 +91,7 @@ class DlnaCollectionPanel (xlgui.panel.collection.CollectionPanel, GObject.GObje
         GObject.idle_add(self.emit, "disconnect-request")
 
     def __del__ (self):
-        logger.info("DLNA Collection panel destroyed!")
+        logger.debug("DLNA Collection panel destroyed!")
 
 
 #class DlnaCollection (xl.collection.Collection):
@@ -116,7 +116,7 @@ class DlnaCollection (xl.trax.TrackDB):
         self.__media_server.connect_to_server()
 
     def __del__ (self):
-        logger.info("DLNA Collection object destroyed!")
+        logger.debug("DLNA Collection object destroyed!")
 
     def shutdown (self):
         # Clean up the signal connection
@@ -128,7 +128,7 @@ class DlnaCollection (xl.trax.TrackDB):
         self.__media_server = None
 
     def on_tracks_changed (self, media_server):
-        logger.info("DLNA Collection: tracks changed!")
+        logger.debug("DLNA Collection: tracks changed!")
 
         new_tracks = media_server.get_tracks()
 
@@ -136,7 +136,7 @@ class DlnaCollection (xl.trax.TrackDB):
         self.update_tracks(new_tracks)
 
     def rescan_media_server (self):
-        logger.info("DLNA Collection: rescan media server")
+        logger.debug("DLNA Collection: rescan media server")
         self.__media_server.rescan_audio_items()
 
     @xl.common.threaded
@@ -169,7 +169,7 @@ class MediaServer (GUPnP.DeviceProxy):
         self.__tracks = []
 
     def __del__ (self):
-        logger.info("MediaServer object {0}: {1} '{2}' destroyed!".format(self, self.get_udn(), self.get_friendly_name()))
+        logger.debug("MediaServer object {0}: {1} '{2}' destroyed!".format(self, self.get_udn(), self.get_friendly_name()))
 
     def get_tracks (self):
         return self.__tracks
@@ -197,17 +197,17 @@ class MediaServer (GUPnP.DeviceProxy):
     def on_system_update_id (self, content_directory, variable, value):
         """Called whenever the contents of the media server change."""
 
-        logger.info("MediaServer: system updated IDs!")
+        logger.debug("MediaServer: system updated IDs!")
 
         # Ignore initial ID update
         if self.__last_update_id is None:
-            logger.info("MediaServer: initial ID update; ignoring!")
+            logger.debug("MediaServer: initial ID update; ignoring!")
             self.__last_update_id = value
             return
 
         # Require the update ID to differ from the previous one
         if self.__last_update_id == value:
-            logger.info("MediaServer: ID update, but no change in ID; ignoring!")
+            logger.debug("MediaServer: ID update, but no change in ID; ignoring!")
             return
 
         self.__last_update_id = value
@@ -224,7 +224,7 @@ class MediaServer (GUPnP.DeviceProxy):
     def on_system_update_id_timeout (self):
         """Called 5 seconds after last on_system_update_id() call."""
 
-        logger.info("MediaServer: update timeout - starting rescan!")
+        logger.debug("MediaServer: update timeout - starting rescan!")
 
         self.__update_timeout_id = None
 
@@ -235,10 +235,10 @@ class MediaServer (GUPnP.DeviceProxy):
 
     @xl.common.threaded
     def rescan_audio_items (self):
-        logger.info('Scanning media server for audio items!')
+        logger.debug('Scanning media server for audio items!')
 
         if self.__scanning:
-            logger.info("Scan already in progress!")
+            logger.debug("Scan already in progress!")
             return
 
         self.__scanning = True
@@ -314,7 +314,7 @@ class MediaServer (GUPnP.DeviceProxy):
             number_returned = out_values[1]
             total_matches = out_values[2]
 
-            logger.info('Retreieved %d music items!' % (number_returned))
+            logger.debug('Retreieved %d music items!' % (number_returned))
 
             # Parse the returned DIDL
             if number_returned > 0:
@@ -333,7 +333,7 @@ class MediaServer (GUPnP.DeviceProxy):
                 else:
                     request_size = MAX_REQUEST_SIZE
             else:
-                logger.info('Retreieved all music items!')
+                logger.debug('Retreieved all music items!')
                 break
 
 
@@ -341,7 +341,7 @@ class MediaServer (GUPnP.DeviceProxy):
         self.__scanning = False
 
         # Set the tracks
-        logger.info("DLNA MediaServer: retreieved {0} audio tracks!".format(len(all_tracks)))
+        logger.debug("DLNA MediaServer: retreieved {0} audio tracks!".format(len(all_tracks)))
 
         self.__tracks = all_tracks
 
@@ -393,7 +393,7 @@ class DlnaManager (GObject.GObject):
 
     def __del__ (self):
         """Overriden to track object's lifetime."""
-        logger.info("DLNA Manager destroyed!")
+        logger.debug("DLNA Manager destroyed!")
 
     def shutdown (self):
         self.__exaile = None
@@ -427,14 +427,14 @@ class DlnaManager (GObject.GObject):
         udn = media_server.get_udn()
         friendly_name = media_server.get_friendly_name()
 
-        logger.info("DLNA Media Server available: '{0}', '{1}'".format(udn, friendly_name))
+        logger.debug("DLNA Media Server available: '{0}', '{1}'".format(udn, friendly_name))
 
         # Store the media server
         if udn in self.__media_servers:
-            logger.info("Server with this UDN already in the list! Ignoring...")
+            logger.debug("Server with this UDN already in the list! Ignoring...")
             return
 
-        logger.info("Adding server to the list!")
+        logger.debug("Adding server to the list!")
         self.__media_servers[udn] = media_server
 
         # Rebuild menu items list
@@ -445,7 +445,7 @@ class DlnaManager (GObject.GObject):
         """Called when a Media Server becomes unavailable."""
         udn = media_server.get_udn()
 
-        logger.info("DLNA Media Server unavailable: '{0}''".format(udn))
+        logger.debug("DLNA Media Server unavailable: '{0}''".format(udn))
 
         # Clean-up the panel
         if udn in self.__panels:
@@ -469,7 +469,7 @@ class DlnaManager (GObject.GObject):
     def on_disconnect_request (self, panel):
         """Called when user requests disconnect from the panel."""
 
-        logger.info("Disconnect from share requested by user!")
+        logger.debug("Disconnect from share requested by user!")
 
         udn = panel.collection.udn
 
@@ -488,7 +488,7 @@ class DlnaManager (GObject.GObject):
     def rescan (self, *_args):
         """Rescan for DLNA media servers."""
 
-        logger.info("Manual rescan!")
+        logger.debug("Manual rescan!")
 
         # Trigger rescan of control points
         if self.__context_manager is not None:
@@ -530,7 +530,7 @@ class DlnaManager (GObject.GObject):
 
         weak_self = weakref.ref(self)
 
-        logger.info("Adding menu %s: %s", name, udn)
+        logger.debug("Adding menu %s: %s", name, udn)
         if self.__menu:
             menu_item = xlgui.widgets.menu.simple_menu_item(udn, ['sep'], name, callback=lambda *args: weak_self().on_server_menu_entry_clicked(udn))
             self.__menu.add_item(menu_item)
@@ -538,7 +538,7 @@ class DlnaManager (GObject.GObject):
     def on_server_menu_entry_clicked (self, udn):
         """Called when user clicks on a server menu item."""
 
-        logger.info("Clicked on server entry: {0}".format(udn))
+        logger.debug("Clicked on server entry: {0}".format(udn))
 
         GObject.idle_add(self.emit, "connect-to-server", udn)
 
@@ -547,7 +547,7 @@ class DlnaManager (GObject.GObject):
         """Connection request"""
 
         if udn in self.__panels:
-            logger.info("Panel already opened!")
+            logger.debug("Panel already opened!")
 
             # A somewhat hackish way to ensure that the panel is reopend
             # if the user closed it without disconnecting
