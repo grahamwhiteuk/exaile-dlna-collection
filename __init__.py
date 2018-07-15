@@ -261,8 +261,15 @@ class MediaServer (GUPnP.DeviceProxy):
             # Create track with primary URI
             resources = didl_object.get_resources()
 
-            uri = resources[0].get_uri()
+            resource = resources[0] # FIXME: find best resource?
+
+            uri = resource.get_uri()
             track = xl.trax.Track(uri, scan=False)
+
+            try:
+                track.set_tag_raw('__length', resource.get_duration(), notify_changed=False)
+            except Exception:
+                track.set_tag_raw('__length', 0, notify_changed=False)
 
             # Set up metadata
             artist = didl_object.get_artist()
