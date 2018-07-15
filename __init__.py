@@ -452,7 +452,7 @@ class DlnaManager (GObject.GObject):
             panel = self.__panels[udn]
 
             panel.collection.shutdown()
-            panel.collection = None
+            #panel.collection = None
 
             # Remove provider
             xl.providers.unregister('main-panel', panel)
@@ -475,7 +475,7 @@ class DlnaManager (GObject.GObject):
 
         # Shutdown the underlying collection
         panel.collection.shutdown()
-        panel.collection = None
+        #panel.collection = None
 
         # Unregister the panel
         xl.providers.unregister('main-panel', panel)
