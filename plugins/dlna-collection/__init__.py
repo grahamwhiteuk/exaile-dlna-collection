@@ -571,7 +571,7 @@ class DlnaManager (GObject.GObject):
         self.__panels[udn] = panel
 
 
-class DlnaLibraryPlugin (object):
+class DlnaCollectionPlugin (object):
     """The exaile plugin."""
 
     __exaile = None
@@ -617,4 +617,4 @@ class DlnaLibraryPlugin (object):
         self.__manager = DlnaManager(self.__exaile, menu)
 
 
-plugin_class = DlnaLibraryPlugin
+plugin_class = DlnaCollectionPlugin

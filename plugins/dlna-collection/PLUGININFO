@@ -1,0 +1,5 @@
+Version='4.0.0'
+Authors=['Rok Mandeljc <rok.mandeljc@gmail.com>']
+Name=_('DLNA Collection')
+Description=_('Allows playing of music from DLNA Media Servers.')
+Category=_('Media Sources')

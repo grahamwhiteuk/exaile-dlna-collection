@@ -1,6 +1,0 @@
-Version='4.0.0'
-Authors=['Rok Mandeljc <rok.mandeljc@gmail.com>']
-Name=_('DLNA Client')
-Description=_('Allows playing of DLNA music shares.')
-Category=_('Media Sources')
-RequiredModules=['dbus']
