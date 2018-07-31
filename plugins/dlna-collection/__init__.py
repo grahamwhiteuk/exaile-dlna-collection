@@ -329,9 +329,9 @@ class MediaServer (GUPnP.DeviceProxy):
 
             if (remaining > 0 or total_matches == 0) and number_returned != 0:
                 if remaining > 0:
-                    request_size = min(remaining, MAX_REQUEST_SIZE)
+                    request_size = min(remaining, self.__MAX_REQUEST_SIZE)
                 else:
-                    request_size = MAX_REQUEST_SIZE
+                    request_size = self.__MAX_REQUEST_SIZE
             else:
                 logger.debug('Retreieved all music items!')
                 break
