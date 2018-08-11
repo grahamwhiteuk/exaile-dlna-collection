@@ -274,14 +274,17 @@ class MediaServer (GUPnP.DeviceProxy):
             # Set up metadata
             artist = didl_object.get_artist()
             if artist is not None:
+                artist = artist.decode('utf-8')
                 track.set_tag_raw('artist', [ artist ], notify_changed=False)
 
             title = didl_object.get_title()
             if title is not None:
+                title = title.decode('utf-8')
                 track.set_tag_raw('title', [ title ], notify_changed=False)
 
             album = didl_object.get_album()
-            if title is not None:
+            if album is not None:
+                album = album.decode('utf-8')
                 track.set_tag_raw('album', [ album ], notify_changed=False)
 
             track_number = didl_object.get_track_number()
