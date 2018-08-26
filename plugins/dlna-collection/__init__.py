@@ -155,7 +155,7 @@ class DlnaCollection (xl.trax.TrackDB):
 
 class MediaServer (GUPnP.DeviceProxy):
     __CONTENT_DIR = "urn:schemas-upnp-org:service:ContentDirectory"
-    __MAX_REQUEST_SIZE = 64
+    __MAX_REQUEST_SIZE = 4096
 
     __gsignals__ = {
         'tracks-changed': (GObject.SignalFlags.RUN_LAST, None, ())
