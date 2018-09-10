@@ -294,7 +294,7 @@ class MediaServer (GUPnP.DeviceProxy):
             date = didl_object.get_date()
             if date is not None:
                 tokens = date.split('-')
-                track.set_tag_raw('year', [ tokens[0] ], notify_changed=False)
+                track.set_tag_raw('date', [ tokens[0] ], notify_changed=False)
 
             # Append to list
             all_tracks.append(track)
