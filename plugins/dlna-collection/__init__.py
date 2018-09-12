@@ -233,6 +233,18 @@ class MediaServer (GUPnP.DeviceProxy):
 
         return False
 
+    def identify_server (self):
+        """Identifies the media server type in order to enable metadata quirks."""
+
+        model_name = self.get_model_name()
+        model_description = self.get_model_description()
+
+        if "MiniDLNA" in model_description:
+            return "minidlna"
+
+        return "generic"
+
+
     @xl.common.threaded
     def rescan_audio_items (self):
         logger.debug('Scanning media server for audio items!')
@@ -240,6 +252,9 @@ class MediaServer (GUPnP.DeviceProxy):
         if self.__scanning:
             logger.debug("Scan already in progress!")
             return
+
+        # Get server name and description to enable quirks
+        server_type = self.identify_server()
 
         self.__scanning = True
 
@@ -271,26 +286,67 @@ class MediaServer (GUPnP.DeviceProxy):
             except Exception:
                 track.set_tag_raw('__length', 0, notify_changed=False)
 
-            # Set up metadata
-            artist = didl_object.get_artist()
+            # *** Set up metadata ***
+            # Artist, album artist, composer: depends on the server
+            composer = None
+            artist = None
+            album_artist = None
+
+            if server_type == "minidlna":
+                # MiniDLNA returns both Artist (as "creator") and Album
+                # artist (as "artist" without role)
+                artist = didl_object.get_creator()
+                album_artist = didl_object.get_artist()
+            else:
+                # Generic codepath; attempt to retrieve artist and
+                # album artist from list of contributors. If not
+                # available, fall-back to the "creator"
+                for entry in didl_object.get_artists():
+                    role = entry.get_role()
+                    if role is None:
+                        artist = entry.get_name()
+                    elif role == "AlbumArtist":
+                        albumartist = entry.get_name()
+
+                for entry in didl_object.get_authors():
+                    role = entry.get_role()
+                    if role == "Composer":
+                        composer = entry.get_name()
+
+                # Fall back to creator
+                if artist is None:
+                    artist = didl_object.get_creator()
+
             if artist is not None:
                 artist = artist.decode('utf-8')
                 track.set_tag_raw('artist', [ artist ], notify_changed=False)
 
+            if album_artist is not None:
+                album_artist = album_artist.decode('utf-8')
+                track.set_tag_raw('albumartist', [ album_artist ], notify_changed=False)
+
+            if composer is not None:
+                composer = composer.decode('utf-8')
+                track.set_tag_raw('composer', [ composer ], notify_changed=False)
+
+            # Title
             title = didl_object.get_title()
             if title is not None:
                 title = title.decode('utf-8')
                 track.set_tag_raw('title', [ title ], notify_changed=False)
 
+            # Album
             album = didl_object.get_album()
             if album is not None:
                 album = album.decode('utf-8')
                 track.set_tag_raw('album', [ album ], notify_changed=False)
 
+            # Track number
             track_number = didl_object.get_track_number()
             if track_number is not None:
                 track.set_tag_raw('tracknumber', [ u'%d' % (track_number) ], notify_changed=False)
 
+            # Track year
             date = didl_object.get_date()
             if date is not None:
                 tokens = date.split('-')
