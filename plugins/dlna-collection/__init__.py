@@ -16,7 +16,7 @@
 #  MA 02110-1301, USA.
 #
 
-from __future__ import print_function
+
 
 import weakref
 
@@ -318,33 +318,28 @@ class MediaServer (GUPnP.DeviceProxy):
                     artist = didl_object.get_creator()
 
             if artist is not None:
-                artist = artist.decode('utf-8')
                 track.set_tag_raw('artist', [ artist ], notify_changed=False)
 
             if album_artist is not None:
-                album_artist = album_artist.decode('utf-8')
                 track.set_tag_raw('albumartist', [ album_artist ], notify_changed=False)
 
             if composer is not None:
-                composer = composer.decode('utf-8')
                 track.set_tag_raw('composer', [ composer ], notify_changed=False)
 
             # Title
             title = didl_object.get_title()
             if title is not None:
-                title = title.decode('utf-8')
                 track.set_tag_raw('title', [ title ], notify_changed=False)
 
             # Album
             album = didl_object.get_album()
             if album is not None:
-                album = album.decode('utf-8')
                 track.set_tag_raw('album', [ album ], notify_changed=False)
 
             # Track number
             track_number = didl_object.get_track_number()
             if track_number is not None:
-                track.set_tag_raw('tracknumber', [ u'%d' % (track_number) ], notify_changed=False)
+                track.set_tag_raw('tracknumber', [ '%d' % (track_number) ], notify_changed=False)
 
             # Track year
             date = didl_object.get_date()
@@ -563,7 +558,7 @@ class DlnaManager (GObject.GObject):
         # Build server list...
         servers = []
 
-        for udn, media_server in self.__media_servers.items():
+        for udn, media_server in list(self.__media_servers.items()):
             friendly_name = media_server.get_friendly_name()
             servers.append(( friendly_name, udn ))
 
