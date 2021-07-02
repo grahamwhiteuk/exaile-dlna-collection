@@ -22,7 +22,7 @@ import weakref
 
 import gi
 
-gi.require_version('GUPnP', '1.0')
+gi.require_version('GUPnP', '1.2')
 gi.require_version('GUPnPAV', '1.0')
 gi.require_version('Gtk', '3.0')
 
